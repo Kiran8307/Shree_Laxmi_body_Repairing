@@ -16,16 +16,48 @@ export default function Gallery() {
   const [caption, setCaption] = useState('');
 
   useEffect(() => {
-    localStorage.setItem('garage_gallery', JSON.stringify(userImages));
+    try {
+      localStorage.setItem('garage_gallery', JSON.stringify(userImages));
+    } catch (error) {
+      console.error('Storage exceeded:', error);
+      alert('Error: Image is too large or device storage is full. Please delete some old photos first!');
+      // Revert to valid state to prevent loop crash
+      setUserImages(userImages.slice(1)); 
+    }
   }, [userImages]);
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setPendingUpload(reader.result);
-        setCaption('');
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          // Dynamic compression for mobile photos
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 800; // Cap image width securely
+          let width = img.width;
+          let height = img.height;
+
+          // Only scale down if the image is too large
+          if (width > MAX_WIDTH) {
+            height = Math.round((height * MAX_WIDTH) / width);
+            width = MAX_WIDTH;
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+
+          // Render as JPEG at 70% quality to strictly keep base64 size tiny
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          
+          setPendingUpload(compressedDataUrl);
+          setCaption('');
+        };
+        img.src = event.target.result;
       };
       reader.readAsDataURL(file);
     }
