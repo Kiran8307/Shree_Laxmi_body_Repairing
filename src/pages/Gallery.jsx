@@ -1,30 +1,29 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import BreadcrumbHeader from '../components/BreadcrumbHeader';
+import { db, storage } from '../firebase';
+import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, deleteDoc, doc as firestoreDoc } from 'firebase/firestore';
+import { ref, uploadString, getDownloadURL, deleteObject } from 'firebase/storage';
 
 export default function Gallery() {
   const fileInputRef = useRef(null);
-  const [userImages, setUserImages] = useState(() => {
-    const saved = localStorage.getItem('garage_gallery');
-    if (saved) {
-      return JSON.parse(saved);
-    }
-    return [];
-  });
-  
+  const [userImages, setUserImages] = useState([]);
   const [pendingUpload, setPendingUpload] = useState(null);
   const [caption, setCaption] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
-    try {
-      localStorage.setItem('garage_gallery', JSON.stringify(userImages));
-    } catch (error) {
-      console.error('Storage exceeded:', error);
-      alert('Error: Image is too large or device storage is full. Please delete some old photos first!');
-      // Revert to valid state to prevent loop crash
-      setUserImages(userImages.slice(1)); 
-    }
-  }, [userImages]);
+    const q = query(collection(db, 'gallery'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const liveImages = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setUserImages(liveImages);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
@@ -65,16 +64,53 @@ export default function Gallery() {
     e.target.value = null;
   };
 
-  const confirmUpload = () => {
-    if (pendingUpload) {
-      setUserImages([{ src: pendingUpload, title: caption || 'Fleet Photo', id: Date.now() }, ...userImages]);
-      setPendingUpload(null);
-      setCaption('');
+  const confirmUpload = async () => {
+    if (pendingUpload && !isUploading) {
+      setIsUploading(true);
+      try {
+        const imageName = `fleet_${Date.now()}.jpg`;
+        const storageRef = ref(storage, `gallery/${imageName}`);
+        
+        // Upload the base64 string
+        await uploadString(storageRef, pendingUpload, 'data_url');
+        
+        // Get the public URL
+        const downloadURL = await getDownloadURL(storageRef);
+        
+        // Save to Firestore
+        await addDoc(collection(db, 'gallery'), {
+          src: downloadURL,
+          storagePath: `gallery/${imageName}`,
+          title: caption || 'Fleet Photo',
+          createdAt: serverTimestamp()
+        });
+        
+        setPendingUpload(null);
+        setCaption('');
+      } catch (error) {
+        console.error("Error uploading image: ", error);
+        alert("Upload failed.");
+      } finally {
+        setIsUploading(false);
+      }
     }
   };
 
-  const deleteImage = (idToRemove) => {
-    setUserImages(userImages.filter(img => img.id !== idToRemove));
+  const deleteImage = async (imgId, storagePath) => {
+    const confirm = window.confirm("Are you sure you want to delete this photo?");
+    if (!confirm) return;
+    
+    try {
+      if (storagePath) {
+        // Delete from Storage
+        const fileRef = ref(storage, storagePath);
+        await deleteObject(fileRef);
+      }
+      // Delete from Firestore
+      await deleteDoc(firestoreDoc(db, 'gallery', imgId));
+    } catch (error) {
+      console.error("Error deleting image: ", error);
+    }
   };
 
   return (
@@ -118,8 +154,10 @@ export default function Gallery() {
                    style={{marginBottom: '15px'}}
                  />
                  <div style={{display: 'flex', gap: '10px', justifyContent: 'center'}}>
-                    <button className="btn btn-solid" style={{padding: '10px 20px', fontSize: '1rem'}} onClick={confirmUpload}>Confirm Upload</button>
-                    <button className="btn" style={{padding: '10px 20px', fontSize: '1rem'}} onClick={() => setPendingUpload(null)}>Cancel</button>
+                    <button className="btn btn-solid" style={{padding: '10px 20px', fontSize: '1rem', opacity: isUploading ? 0.7 : 1}} onClick={confirmUpload} disabled={isUploading}>
+                      {isUploading ? 'Uploading...' : 'Confirm Upload'}
+                    </button>
+                    <button className="btn" style={{padding: '10px 20px', fontSize: '1rem'}} onClick={() => setPendingUpload(null)} disabled={isUploading}>Cancel</button>
                  </div>
               </div>
             )}
@@ -133,7 +171,7 @@ export default function Gallery() {
                    <div className="gallery-caption" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
                        <h4>{img.title}</h4>
                        <button 
-                          onClick={() => deleteImage(img.id)}
+                          onClick={() => deleteImage(img.id, img.storagePath)}
                           style={{background: 'rgba(255,0,0,0.8)', color: 'white', border: 'none', padding: '5px 10px', borderRadius: '4px', cursor: 'pointer', zIndex: 10}}
                        >
                          Delete

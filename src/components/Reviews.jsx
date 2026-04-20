@@ -1,33 +1,51 @@
 import { useState, useEffect } from 'react';
+import { db } from '../firebase';
+import { collection, addDoc, onSnapshot, query, orderBy, serverTimestamp } from 'firebase/firestore';
 
 export default function Reviews() {
-  const [reviews, setReviews] = useState(() => {
-    const saved = localStorage.getItem('garage_reviews');
-    if (saved) {
-      return JSON.parse(saved);
-    }
-    return [
-      { id: 1, name: "Arvind Freight Lines", rating: 5, text: "Excellent paint and body work on our Tata Signa fleet. Recommended!" },
-      { id: 2, name: "Mahindra Logistics Hub", rating: 5, text: "They completely rebuilt a crashed chassis perfectly. 10/10." }
-    ];
-  });
-
+  const [reviews, setReviews] = useState([]);
   const [name, setName] = useState('');
   const [rating, setRating] = useState(5);
   const [text, setText] = useState('');
 
   useEffect(() => {
-    localStorage.setItem('garage_reviews', JSON.stringify(reviews));
-  }, [reviews]);
+    const q = query(collection(db, 'reviews'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const liveReviews = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      // Keep the default reviews if database is empty initially
+      if (liveReviews.length === 0) {
+        setReviews([
+          { id: '1', name: "Arvind Freight Lines", rating: 5, text: "Excellent paint and body work on our Tata Signa fleet. Recommended!" },
+          { id: '2', name: "Mahindra Logistics Hub", rating: 5, text: "They completely rebuilt a crashed chassis perfectly. 10/10." }
+        ]);
+      } else {
+        setReviews(liveReviews);
+      }
+    });
 
-  const handleSubmit = (e) => {
+    return () => unsubscribe();
+  }, []);
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!name || !text) return;
-    const newDoc = { id: Date.now(), name, rating, text };
-    setReviews([newDoc, ...reviews]);
-    setName('');
-    setText('');
-    setRating(5);
+    try {
+      await addDoc(collection(db, 'reviews'), {
+        name,
+        rating,
+        text,
+        createdAt: serverTimestamp()
+      });
+      setName('');
+      setText('');
+      setRating(5);
+    } catch (error) {
+      console.error("Error adding review: ", error);
+      alert("Error adding review.");
+    }
   };
 
   return (
